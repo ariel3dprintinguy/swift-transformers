@@ -113,25 +113,48 @@ struct TokenizerModel {
         let normalizedTokenizerName = (tokenizerName.lowercased() == "wordpiece" || tokenizerName.lowercased() == "bert") ? "BertTokenizer" : tokenizerName
         print("TokenizerModel.from: Normalized tokenizer name: \(normalizedTokenizerName)")
         
-        // Step 3: Validate vocabulary
+        // Step 3: Validate model section
         guard let modelConfig = tokenizerData.model else {
             print("TokenizerModel.from: No 'model' section in tokenizerData")
             throw TokenizerError.missingVocab
         }
+        print("TokenizerModel.from: modelConfig: \(modelConfig)")
+        
+        // Step 4: Extract and validate vocab
         guard let vocab = modelConfig.vocab?.value else {
             print("TokenizerModel.from: Missing 'vocab' field in model section of tokenizerData")
             print("TokenizerModel.from: Full tokenizerData: \(tokenizerData)")
             throw TokenizerError.missingVocab
         }
-        // Check vocab format
-        if let vocabDict = vocab as? [String: Int] {
+        
+        // Step 5: Handle vocab format
+        let vocabDict: [String: Int]
+        switch vocab {
+        case let dict as [String: Int]:
+            vocabDict = dict
             print("TokenizerModel.from: Vocabulary size: \(vocabDict.count) entries")
-        } else {
-            print("TokenizerModel.from: Invalid vocab format in tokenizerData. Expected [String: Int], got: \(type(of: vocab))")
+        case let dict as [String: Any]:
+            // Attempt to convert mixed-type dictionary
+            vocabDict = dict.compactMapValues { value in
+                if let intValue = value as? Int {
+                    return intValue
+                } else if let number = value as? NSNumber {
+                    return number.intValue
+                } else {
+                    print("TokenizerModel.from: Non-integer value in vocab: \(value)")
+                    return nil
+                }
+            }
+            print("TokenizerModel.from: Converted vocabulary size: \(vocabDict.count) entries")
+        case let number as NSNumber:
+            print("TokenizerModel.from: Vocab is a number (\(number)), not a dictionary. Full tokenizerData: \(tokenizerData)")
+            throw TokenizerError.malformedVocab
+        default:
+            print("TokenizerModel.from: Invalid vocab format - expected [String: Int], got: \(type(of: vocab)). Raw vocab value: \(vocab)")
             throw TokenizerError.malformedVocab
         }
-        
-        // Step 4: Initialize tokenizer
+
+        // Step 6: Initialize tokenizer
         if let tokenizerClass = knownTokenizers[normalizedTokenizerName] {
             do {
                 let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
@@ -142,19 +165,6 @@ struct TokenizerModel {
                 throw error
             }
         } else {
-            // Case-insensitive fallback
-            if let key = knownTokenizers.keys.first(where: { $0.lowercased() == normalizedTokenizerName.lowercased() }) {
-                if let tokenizerClass = knownTokenizers[key] {
-                    do {
-                        let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
-                        print("TokenizerModel.from: Successfully initialized \(key) via case-insensitive match")
-                        return tokenizer
-                    } catch {
-                        print("TokenizerModel.from: Failed to initialize \(key) with error: \(error)")
-                        throw error
-                    }
-                }
-            }
             print("TokenizerModel.from: Unsupported tokenizer type: \(normalizedTokenizerName)")
             throw TokenizerError.unsupportedTokenizer(normalizedTokenizerName)
         }

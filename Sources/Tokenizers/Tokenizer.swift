@@ -74,7 +74,6 @@ public extension TokenizingModel {
 public protocol PreTrainedTokenizerModel: TokenizingModel {
     init(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String : Int]) throws
 }
-
 struct TokenizerModel {
     static let knownTokenizers: [String : PreTrainedTokenizerModel.Type] = [
         "BertTokenizer"      : BertTokenizer.self,
@@ -98,29 +97,58 @@ struct TokenizerModel {
     }
     
     public static func from(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String : Int]) throws -> TokenizingModel {
-        guard let tokenizerClassName = tokenizerConfig.tokenizerClass?.stringValue else {
+        // Step 1: Try tokenizerClass first, then fall back to model type
+        let tokenizerClassName = tokenizerConfig.tokenizerClass?.stringValue ?? tokenizerData.model?.type?.stringValue
+        guard let tokenizerClassName = tokenizerClassName else {
+            print("TokenizerModel.from: No tokenizer_class or model type found in config")
             throw TokenizerError.missingTokenizerClassInConfig
         }
+        print("TokenizerModel.from: Tokenizer class/type: \(tokenizerClassName)")
         
-        // Some tokenizer_class entries use a Fast suffix
+        // Step 2: Normalize the tokenizer name
         var tokenizerName = tokenizerClassName.replacingOccurrences(of: "Fast", with: "")
         if tokenizerName.hasSuffix("Tokenizer") {
             tokenizerName = String(tokenizerName.dropLast("Tokenizer".count))
         }
+        
+        // Step 3: Special handling for "WordPiece" to map to BertTokenizer
+        let normalizedTokenizerName = (tokenizerName == "WordPiece") ? "BertTokenizer" : tokenizerName
+        print("TokenizerModel.from: Normalized tokenizer name: \(normalizedTokenizerName)")
+        
+        // Step 4: Check vocabulary presence
+        guard let vocab = tokenizerData.model?.vocab?.value as? [String: Any] else {
+            print("TokenizerModel.from: Missing or invalid vocab in tokenizerData")
+            throw TokenizerError.missingVocab
+        }
+        print("TokenizerModel.from: Vocabulary size: \(vocab.count) entries")
 
-        // Try to perform a direct case-sensitive lookup first
-        if let tokenizerClass = TokenizerModel.knownTokenizers[tokenizerName] {
-            return try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
+        // Step 5: Attempt to initialize the tokenizer
+        if let tokenizerClass = knownTokenizers[normalizedTokenizerName] {
+            do {
+                let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
+                print("TokenizerModel.from: Successfully initialized \(normalizedTokenizerName)")
+                return tokenizer
+            } catch {
+                print("TokenizerModel.from: Failed to initialize \(normalizedTokenizerName) with error: \(error)")
+                throw error
+            }
         } else {
-            // If the direct lookup fails, perform a case-insensitive scan over the keys
-            if let key = TokenizerModel.knownTokenizers.keys.first(where: { $0.lowercased() == tokenizerName.lowercased() }) {
-                if let tokenizerClass = TokenizerModel.knownTokenizers[key] {
-                    return try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
+            // Step 6: Case-insensitive fallback
+            if let key = knownTokenizers.keys.first(where: { $0.lowercased() == normalizedTokenizerName.lowercased() }) {
+                if let tokenizerClass = knownTokenizers[key] {
+                    do {
+                        let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
+                        print("TokenizerModel.from: Successfully initialized \(key) via case-insensitive match")
+                        return tokenizer
+                    } catch {
+                        print("TokenizerModel.from: Failed to initialize \(key) with error: \(error)")
+                        throw error
+                    }
                 }
             }
+            print("TokenizerModel.from: Unsupported tokenizer type: \(normalizedTokenizerName)")
+            throw TokenizerError.unsupportedTokenizer(normalizedTokenizerName)
         }
-        
-        throw TokenizerError.unsupportedTokenizer(tokenizerName)
     }
 }
 

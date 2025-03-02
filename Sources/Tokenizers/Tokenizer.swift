@@ -97,7 +97,7 @@ struct TokenizerModel {
     }
     
     public static func from(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String : Int]) throws -> TokenizingModel {
-        // Step 1: Try tokenizerClass first, then fall back to model type
+        // Step 1: Determine tokenizer class/type
         let tokenizerClassName = tokenizerConfig.tokenizerClass?.stringValue ?? tokenizerData.model?.type?.stringValue
         guard let tokenizerClassName = tokenizerClassName else {
             print("TokenizerModel.from: No tokenizer_class or model type found in config")
@@ -105,24 +105,33 @@ struct TokenizerModel {
         }
         print("TokenizerModel.from: Tokenizer class/type: \(tokenizerClassName)")
         
-        // Step 2: Normalize the tokenizer name
+        // Step 2: Normalize tokenizer name
         var tokenizerName = tokenizerClassName.replacingOccurrences(of: "Fast", with: "")
         if tokenizerName.hasSuffix("Tokenizer") {
             tokenizerName = String(tokenizerName.dropLast("Tokenizer".count))
         }
-        
-        // Step 3: Special handling for "WordPiece" to map to BertTokenizer
-        let normalizedTokenizerName = (tokenizerName == "WordPiece") ? "BertTokenizer" : tokenizerName
+        let normalizedTokenizerName = (tokenizerName.lowercased() == "wordpiece" || tokenizerName.lowercased() == "bert") ? "BertTokenizer" : tokenizerName
         print("TokenizerModel.from: Normalized tokenizer name: \(normalizedTokenizerName)")
         
-        // Step 4: Check vocabulary presence
-        guard let vocab = tokenizerData.model?.vocab?.value as? [String: Any] else {
-            print("TokenizerModel.from: Missing or invalid vocab in tokenizerData")
+        // Step 3: Validate vocabulary
+        guard let modelConfig = tokenizerData.model else {
+            print("TokenizerModel.from: No 'model' section in tokenizerData")
             throw TokenizerError.missingVocab
         }
-        print("TokenizerModel.from: Vocabulary size: \(vocab.count) entries")
-
-        // Step 5: Attempt to initialize the tokenizer
+        guard let vocab = modelConfig.vocab?.value else {
+            print("TokenizerModel.from: Missing 'vocab' field in model section of tokenizerData")
+            print("TokenizerModel.from: Full tokenizerData: \(tokenizerData)")
+            throw TokenizerError.missingVocab
+        }
+        // Check vocab format
+        if let vocabDict = vocab as? [String: Int] {
+            print("TokenizerModel.from: Vocabulary size: \(vocabDict.count) entries")
+        } else {
+            print("TokenizerModel.from: Invalid vocab format in tokenizerData. Expected [String: Int], got: \(type(of: vocab))")
+            throw TokenizerError.malformedVocab
+        }
+        
+        // Step 4: Initialize tokenizer
         if let tokenizerClass = knownTokenizers[normalizedTokenizerName] {
             do {
                 let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
@@ -133,7 +142,7 @@ struct TokenizerModel {
                 throw error
             }
         } else {
-            // Step 6: Case-insensitive fallback
+            // Case-insensitive fallback
             if let key = knownTokenizers.keys.first(where: { $0.lowercased() == normalizedTokenizerName.lowercased() }) {
                 if let tokenizerClass = knownTokenizers[key] {
                     do {

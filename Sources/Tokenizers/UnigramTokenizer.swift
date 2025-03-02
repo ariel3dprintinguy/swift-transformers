@@ -93,6 +93,7 @@ class UnigramTokenizer: PreTrainedTokenizerModel {
     func convertIdToToken(_ id: Int) -> String? {
         return vocab[id].token
     }
+    
     func tokenize(text: String) -> [String] {
         var lattice = TokenLattice(sentence: text, bosTokenId: bosTokenId ?? 0, eosTokenId: eosTokenId ?? 0)
         
@@ -105,11 +106,7 @@ class UnigramTokenizer: PreTrainedTokenizerModel {
             
             let beginIndex = sentence.index(sentence.startIndex, offsetBy: beginPos)
             for token in trie.commonPrefixSearchIterator(sentence[beginIndex...]).map({ String($0) }) {
-<<<<<<< HEAD
                 guard let tokenId = tokensToIds[LiteralString(value: token)] else { fatalError("Token not in vocab: \(token)") }
-=======
-                guard let tokenId = tokensToIds[token as NSString] else { fatalError("Token not in vocab: \(token)") }
->>>>>>> be855fac725dbae27264e47a3eb535cc422a4ba8
                 let tokenScore = vocab[tokenId].score
                 lattice.insert(startOffset: beginPos, length: token.count, score: tokenScore, tokenId: tokenId)
                 if !hasSingleNode && token.count == mblen {

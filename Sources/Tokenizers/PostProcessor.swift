@@ -37,7 +37,9 @@ struct PostProcessorFactory {
             typeName = String(typeName.dropLast("Processing".count))
         }
 
-        let type = PostProcessorType(rawValue: typeName)
+        // Normalize "Bert" to "BertProcessing"
+        let normalizedTypeName = typeName == "Bert" ? "BertProcessing" : typeName
+        let type = PostProcessorType(rawValue: normalizedTypeName)
         switch type {
             case .TemplateProcessing : return TemplateProcessing(config: config)
             case .ByteLevel          : return ByteLevelPostProcessor(config: config)

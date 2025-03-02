@@ -75,20 +75,6 @@ struct PreTokenizerFactory {
         }
     }
 }
-
-class BertPreTokenizer: PreTokenizer {
-    let re: String
-
-    required init(config: Config) {
-        // Ref: https://github.com/huggingface/transformers.js/blob/27920d84831e323275b38f0b5186644b7936e1a2/src/tokenizers.js#L1002
-        re = "[^\\s\(Constants.PUNCTUATION_REGEX)]+|[\(Constants.PUNCTUATION_REGEX)]"
-    }
-
-    func preTokenize(text: String, options: PreTokenizerOptions = [.firstSection]) -> [String] {
-        return text.ranges(of: re).map { String(text[$0]) }
-    }
-}
-
 class PreTokenizerSequence: PreTokenizer {
     let preTokenizers: [PreTokenizer]
     
@@ -218,7 +204,6 @@ class PunctuationPreTokenizer: PreTokenizer {
 }
 
 class BertPreTokenizer: PreTokenizer {
-    // Identical to PunctuationPreTokenizer, but with a different regex
     let PUNCTUATION_REGEX = #"\p{P}\u0021-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u007E"#
     let re: String
 
@@ -226,7 +211,7 @@ class BertPreTokenizer: PreTokenizer {
         re = "[^\\s\(PUNCTUATION_REGEX)]+|[\(PUNCTUATION_REGEX)]"
     }
 
-    func preTokenize(text: String) -> [String] {
+    func preTokenize(text: String, options: PreTokenizerOptions = [.firstSection]) -> [String] {
         return text.ranges(of: re).map { String(text[$0]) }
     }
 }

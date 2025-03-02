@@ -60,9 +60,6 @@ class WordPieceDecoder: Decoder {
     let prefix: String
     let cleanup: Bool
 
-    // https://github.com/huggingface/tokenizers/blob/main/tokenizers/src/decoders/wordpiece.rs#L31
-    private let re = try! NSRegularExpression(pattern: "\\s(\\.|\\?|\\!|\\,|'\\s|n't|'m|'s|'ve|'re)", options: [])
-
     required public init(config: Config) {
         guard let prefix = config.prefix?.stringValue else { fatalError("Missing `prefix` configuration for WordPieceDecoder.") }
         self.prefix = prefix
@@ -70,18 +67,24 @@ class WordPieceDecoder: Decoder {
     }
 
     func decode(tokens: [String]) -> [String] {
-        let firstToken = cleanup ? cleanUpTokenization(tokens.first!) : tokens.first!
-        return [firstToken] + tokens.dropFirst().map { token in
-            let token = token.hasPrefix(prefix) ? token.replacingCharacters(in: token.range(of: prefix)!, with: "") : " \(token)"
-            return cleanup ? cleanUpTokenization(token) : token
+        return tokens.enumerated().map { index, token in
+            var decodedToken = token
+            if index != 0 {
+                if decodedToken.hasPrefix(self.prefix) {
+                    decodedToken = String(decodedToken.dropFirst(self.prefix.count))
+                } else {
+                    decodedToken = " " + decodedToken
+                }
+            }
+            if self.cleanup {
+                decodedToken = cleanUpTokenization(decodedToken)
+            }
+            return decodedToken
         }
     }
-
-    // https://github.com/huggingface/tokenizers/blob/main/tokenizers/src/decoders/wordpiece.rs#L40
+    
     private func cleanUpTokenization(_ token: String) -> String {
-        let range = NSRange(location: 0, length: token.utf16.count)
-        return re.stringByReplacingMatches(in: token, options: [], range: range, withTemplate: "$1")
-            .replacingOccurrences(of: " do not", with: " don't")
+        return token.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 class DecoderSequence: Decoder {

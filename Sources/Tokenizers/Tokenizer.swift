@@ -126,6 +126,7 @@ struct TokenizerModel {
             print("TokenizerModel.from: Full tokenizerData: \(tokenizerData)")
             throw TokenizerError.missingVocab
         }
+        print("TokenizerModel.from: Raw vocab value: \(vocab) (type: \(type(of: vocab)))")
         
         // Step 5: Handle vocab format
         let vocabDict: [String: Int]
@@ -134,7 +135,6 @@ struct TokenizerModel {
             vocabDict = dict
             print("TokenizerModel.from: Vocabulary size: \(vocabDict.count) entries")
         case let dict as [String: Any]:
-            // Attempt to convert mixed-type dictionary
             vocabDict = dict.compactMapValues { value in
                 if let intValue = value as? Int {
                     return intValue
@@ -147,8 +147,17 @@ struct TokenizerModel {
             }
             print("TokenizerModel.from: Converted vocabulary size: \(vocabDict.count) entries")
         case let number as NSNumber:
-            print("TokenizerModel.from: Vocab is a number (\(number)), not a dictionary. Full tokenizerData: \(tokenizerData)")
-            throw TokenizerError.malformedVocab
+            // Check for vocab_file as a fallback
+            if let vocabFile = modelConfig.vocabFile?.stringValue {
+                print("TokenizerModel.from: Vocab is a number (\(number)), but vocab_file found: \(vocabFile). Attempting to load vocab from file...")
+                // Placeholder for file loading logic (implement based on your environment)
+                let vocabDictFromFile = try loadVocabFromFile(vocabFile)
+                print("TokenizerModel.from: Loaded vocab from file with \(vocabDictFromFile.count) entries")
+                vocabDict = vocabDictFromFile
+            } else {
+                print("TokenizerModel.from: Vocab is a number (\(number)), no vocab_file provided. Full tokenizerData: \(tokenizerData)")
+                throw TokenizerError.malformedVocab
+            }
         default:
             print("TokenizerModel.from: Invalid vocab format - expected [String: Int], got: \(type(of: vocab)). Raw vocab value: \(vocab)")
             throw TokenizerError.malformedVocab
@@ -168,6 +177,22 @@ struct TokenizerModel {
             print("TokenizerModel.from: Unsupported tokenizer type: \(normalizedTokenizerName)")
             throw TokenizerError.unsupportedTokenizer(normalizedTokenizerName)
         }
+    }
+
+    // Helper function to load vocab from a file (implement based on your environment)
+    private static func loadVocabFromFile(_ filePath: String) throws -> [String: Int] {
+        // Placeholder: Implement file reading logic for your platform (e.g., iOS)
+        let vocabURL = URL(fileURLWithPath: filePath)
+        let vocabData = try String(contentsOf: vocabURL, encoding: .utf8)
+        var vocabDict: [String: Int] = [:]
+        let lines = vocabData.split(separator: "\n")
+        for (index, line) in lines.enumerated() {
+            let token = String(line).trimmingCharacters(in: .whitespaces)
+            if !token.isEmpty {
+                vocabDict[token] = index
+            }
+        }
+        return vocabDict
     }
 }
 

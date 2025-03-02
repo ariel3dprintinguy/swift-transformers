@@ -24,8 +24,8 @@ public extension Hub {
     }
     
     struct Repo {
-        let id: String
-        let type: RepoType
+        public let id: String
+        public let type: RepoType
         
         public init(id: String, type: RepoType = .models) {
             self.id = id
@@ -38,9 +38,9 @@ public extension Hub {
 
 @dynamicMemberLookup
 public struct Config {
-    public private(set) var dictionary: [String: Any]
+    public private(set) var dictionary: [NSString: Any]
 
-    public init(_ dictionary: [String: Any]) {
+    public init(_ dictionary: [NSString: Any]) {
         self.dictionary = dictionary
     }
 
@@ -76,8 +76,8 @@ public struct Config {
 
 
     public subscript(dynamicMember member: String) -> Config? {
-        let key = dictionary[member] != nil ? member : uncamelCase(member)
-        if let value = dictionary[key] as? [String: Any] {
+        let key = (dictionary[member as NSString] != nil ? member : uncamelCase(member)) as NSString
+        if let value = dictionary[key] as? [NSString: Any] {
             return Config(value)
         } else if let value = dictionary[key] {
             return Config(["value": value])
@@ -96,7 +96,7 @@ public struct Config {
     // Instead of doing this we could provide custom classes and decode to them
     public var arrayValue: [Config]? {
         guard let list = value as? [Any] else { return nil }
-        return list.map { Config($0 as! [String : Any]) }
+        return list.map { Config($0 as! [NSString : Any]) }
     }
     
     /// Tuple of token identifier and string value
@@ -189,28 +189,39 @@ public class LanguageModelConfigurationFromHub {
         modelName: String,
         hubApi: HubApi = .shared
     ) async throws -> Configurations {
-        let filesToDownload = ["config.json", "tokenizer_config.json", "tokenizer.json"]
+        let filesToDownload = ["config.json", "tokenizer_config.json", "chat_template.json", "tokenizer.json"]
         let repo = Hub.Repo(id: modelName)
         let downloadedModelFolder = try await hubApi.snapshot(from: repo, matching: filesToDownload)
 
         return try await loadConfig(modelFolder: downloadedModelFolder, hubApi: hubApi)
     }
-    
+
     func loadConfig(
         modelFolder: URL,
         hubApi: HubApi = .shared
     ) async throws -> Configurations {
-        // Note tokenizerConfig may be nil (does not exist in all models)
+        // Load required configurations
         let modelConfig = try hubApi.configuration(fileURL: modelFolder.appending(path: "config.json"))
-        let tokenizerConfig = try? hubApi.configuration(fileURL: modelFolder.appending(path: "tokenizer_config.json"))
-        let tokenizerVocab = try hubApi.configuration(fileURL: modelFolder.appending(path: "tokenizer.json"))
-        
-        let configs = Configurations(
+        let tokenizerData = try hubApi.configuration(fileURL: modelFolder.appending(path: "tokenizer.json"))
+        // Load tokenizer config
+        var tokenizerConfig = try? hubApi.configuration(fileURL: modelFolder.appending(path: "tokenizer_config.json"))
+        // Check for chat template and merge if available
+        if let chatTemplateConfig = try? hubApi.configuration(fileURL: modelFolder.appending(path: "chat_template.json")),
+           let chatTemplate = chatTemplateConfig.chatTemplate?.stringValue {
+            // The value of chat_template could also be an array of strings, but we're not handling that case here, since it's discouraged.
+            // Create or update tokenizer config with chat template
+            if var configDict = tokenizerConfig?.dictionary {
+                configDict["chat_template"] = chatTemplate
+                tokenizerConfig = Config(configDict)
+            } else {
+                tokenizerConfig = Config(["chat_template": chatTemplate])
+            }
+        }
+        return Configurations(
             modelConfig: modelConfig,
             tokenizerConfig: tokenizerConfig,
-            tokenizerData: tokenizerVocab
+            tokenizerData: tokenizerData
         )
-        return configs
     }
 
     static func fallbackTokenizerConfig(for modelType: String) -> Config? {
@@ -218,7 +229,7 @@ public class LanguageModelConfigurationFromHub {
         do {
             let data = try Data(contentsOf: url)
             let parsed = try JSONSerialization.jsonObject(with: data, options: [])
-            guard let dictionary = parsed as? [String: Any] else { return nil }
+            guard let dictionary = parsed as? [NSString: Any] else { return nil }
             return Config(dictionary)
         } catch {
             return nil

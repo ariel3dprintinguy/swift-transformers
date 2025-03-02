@@ -10,7 +10,7 @@ import Foundation
 import Hub
 
 public class BertTokenizer {
-    private let basicTokenizer = BasicTokenizer()
+    private let basicTokenizer: BasicTokenizer
     private let wordpieceTokenizer: WordpieceTokenizer
     private let maxLen = 512
     private let tokenizeChineseChars: Bool
@@ -23,20 +23,26 @@ public class BertTokenizer {
     public var eosToken: String?
     public var eosTokenId: Int?
 
+    public let fuseUnknownTokens: Bool
+
     public init(vocab: [String: Int],
-         merges: [String]?,
-         tokenizeChineseChars: Bool = true,
-         bosToken: String? = nil,
-         eosToken: String? = nil
+                merges: [String]?,
+                tokenizeChineseChars: Bool = true,
+                bosToken: String? = nil,
+                eosToken: String? = nil,
+                fuseUnknownTokens: Bool = false,
+                doLowerCase: Bool = true
     ) {
         self.vocab = vocab
         self.ids_to_tokens = Utils.invert(vocab)
+        self.basicTokenizer = BasicTokenizer(doLowerCase: doLowerCase)
         self.wordpieceTokenizer = WordpieceTokenizer(vocab: self.vocab)
         self.tokenizeChineseChars = tokenizeChineseChars
         self.bosToken = bosToken
         self.bosTokenId = bosToken == nil ? nil : vocab[bosToken!]
         self.eosToken = eosToken
         self.eosTokenId = eosToken == nil ? nil : vocab[eosToken!]
+        self.fuseUnknownTokens = fuseUnknownTokens
     }
     
     public required convenience init(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String : Int]) throws {
@@ -47,7 +53,9 @@ public class BertTokenizer {
         let tokenizeChineseChars = tokenizerConfig.handleChineseChars?.boolValue ?? true
         let eosToken = tokenizerConfig.eosToken?.stringValue
         let bosToken = tokenizerConfig.bosToken?.stringValue
-        self.init(vocab: vocab, merges: merges, tokenizeChineseChars: tokenizeChineseChars, bosToken: bosToken, eosToken: eosToken)
+        let fuseUnknown = tokenizerConfig.fuseUnk?.boolValue ?? false
+        let doLowerCase = tokenizerConfig.doLowerCase?.boolValue ?? true
+        self.init(vocab: vocab, merges: merges, tokenizeChineseChars: tokenizeChineseChars, bosToken: bosToken, eosToken: eosToken, fuseUnknownTokens: fuseUnknown, doLowerCase: doLowerCase)
     }
     
     
@@ -72,7 +80,7 @@ public class BertTokenizer {
                 """
             )
         }
-        return tokens.map { vocab[$0]! }
+        return tokens.compactMap { vocab[$0] }
     }
     
     /// Main entry point
@@ -86,7 +94,7 @@ public class BertTokenizer {
     
     /// Un-tokenization: get tokens from tokenIds
     func unTokenize(tokens: [Int]) -> [String] {
-        return tokens.map { ids_to_tokens[$0]! }
+        return tokens.compactMap { ids_to_tokens[$0] }
     }
     
     /// Un-tokenization:
@@ -149,21 +157,36 @@ extension BertTokenizer: PreTrainedTokenizerModel {
 
 
 class BasicTokenizer {
+    let doLowerCase: Bool
+
+    init(doLowerCase: Bool = true) {
+        self.doLowerCase = doLowerCase
+    }
+
     let neverSplit = [
         "[UNK]", "[SEP]", "[PAD]", "[CLS]", "[MASK]"
     ]
-    
+
+    func maybeStripAccents(_ text: String) -> String {
+        guard doLowerCase else { return text }
+        return text.folding(options: .diacriticInsensitive, locale: nil)
+    }
+
+    func maybeLowercase(_ text: String) -> String {
+        guard doLowerCase else { return text }
+        return text.lowercased()
+    }
+
     func tokenize(text: String) -> [String] {
-        let splitTokens = text.folding(options: .diacriticInsensitive, locale: nil)
-            .components(separatedBy: NSCharacterSet.whitespaces)
+        let splitTokens = maybeStripAccents(text).components(separatedBy: NSCharacterSet.whitespaces)
         let tokens = splitTokens.flatMap({ (token: String) -> [String] in
             if neverSplit.contains(token) {
                 return [token]
             }
             var toks: [String] = []
             var currentTok = ""
-            for c in token.lowercased() {
-                if c.isLetter || c.isNumber || c == "°" {
+            for c in maybeLowercase(token) {
+                if !c.isExtendedPunctuation {
                     currentTok += String(c)
                 } else if currentTok.count > 0 {
                     toks.append(currentTok)
@@ -182,6 +205,22 @@ class BasicTokenizer {
     }
 }
 
+extension Character {
+    /// https://github.com/huggingface/transformers/blob/8c1b5d37827a6691fef4b2d926f2d04fb6f5a9e3/src/transformers/tokenization_utils.py#L367
+    var isExtendedPunctuation: Bool {
+        if isPunctuation { return true }
+        if let value = unicodeScalars.first?.value {
+            switch value {
+                case 33...47: return true
+                case 58...64: return true
+                case 91...96: return true
+                case 123...126: return true
+                default: return false
+            }
+        }
+        return false
+    }
+}
 
 class WordpieceTokenizer {
     let unkToken = "[UNK]"

@@ -97,84 +97,27 @@ struct TokenizerModel {
     }
     
     public static func from(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String : Int]) throws -> TokenizingModel {
-        // Step 1: Determine tokenizer class/type
         let tokenizerClassName = tokenizerConfig.tokenizerClass?.stringValue ?? tokenizerData.model?.type?.stringValue
         guard let tokenizerClassName = tokenizerClassName else {
-            print("TokenizerModel.from: No tokenizer_class or model type found in config")
             throw TokenizerError.missingTokenizerClassInConfig
         }
-        print("TokenizerModel.from: Tokenizer class/type: \(tokenizerClassName)")
         
-        // Step 2: Normalize tokenizer name
         var tokenizerName = tokenizerClassName.replacingOccurrences(of: "Fast", with: "")
         if tokenizerName.hasSuffix("Tokenizer") {
             tokenizerName = String(tokenizerName.dropLast("Tokenizer".count))
         }
         let normalizedTokenizerName = (tokenizerName.lowercased() == "wordpiece" || tokenizerName.lowercased() == "bert") ? "BertTokenizer" : tokenizerName
-        print("TokenizerModel.from: Normalized tokenizer name: \(normalizedTokenizerName)")
         
-        // Step 3: Validate model section
         guard let modelConfig = tokenizerData.model else {
-            print("TokenizerModel.from: No 'model' section in tokenizerData")
             throw TokenizerError.missingVocab
         }
-        print("TokenizerModel.from: modelConfig: \(modelConfig)")
-        
-        // Step 4: Extract and validate vocab
-        guard let vocab = modelConfig.vocab?.value else {
-            print("TokenizerModel.from: Missing 'vocab' field in model section of tokenizerData")
-            print("TokenizerModel.from: Full tokenizerData: \(tokenizerData)")
-            throw TokenizerError.missingVocab
-        }
-        print("TokenizerModel.from: Raw vocab value: \(vocab) (type: \(type(of: vocab)))")
-        
-        // Step 5: Handle vocab format
-        let vocabDict: [String: Int]
-        switch vocab {
-        case let dict as [String: Int]:
-            vocabDict = dict
-            print("TokenizerModel.from: Vocabulary size: \(vocabDict.count) entries")
-        case let dict as [String: Any]:
-            vocabDict = dict.compactMapValues { value in
-                if let intValue = value as? Int {
-                    return intValue
-                } else if let number = value as? NSNumber {
-                    return number.intValue
-                } else {
-                    print("TokenizerModel.from: Non-integer value in vocab: \(value)")
-                    return nil
-                }
-            }
-            print("TokenizerModel.from: Converted vocabulary size: \(vocabDict.count) entries")
-        case let number as NSNumber:
-            // Check for vocab_file as a fallback
-            if let vocabFile = modelConfig.vocabFile?.stringValue {
-                print("TokenizerModel.from: Vocab is a number (\(number)), but vocab_file found: \(vocabFile). Attempting to load vocab from file...")
-                // Placeholder for file loading logic (implement based on your environment)
-                let vocabDictFromFile = try loadVocabFromFile(vocabFile)
-                print("TokenizerModel.from: Loaded vocab from file with \(vocabDictFromFile.count) entries")
-                vocabDict = vocabDictFromFile
-            } else {
-                print("TokenizerModel.from: Vocab is a number (\(number)), no vocab_file provided. Full tokenizerData: \(tokenizerData)")
-                throw TokenizerError.malformedVocab
-            }
-        default:
-            print("TokenizerModel.from: Invalid vocab format - expected [String: Int], got: \(type(of: vocab)). Raw vocab value: \(vocab)")
+        guard let vocabDict = modelConfig.vocab?.dictionary as? [String: Int] else {
             throw TokenizerError.malformedVocab
         }
-
-        // Step 6: Initialize tokenizer
+        
         if let tokenizerClass = knownTokenizers[normalizedTokenizerName] {
-            do {
-                let tokenizer = try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
-                print("TokenizerModel.from: Successfully initialized \(normalizedTokenizerName)")
-                return tokenizer
-            } catch {
-                print("TokenizerModel.from: Failed to initialize \(normalizedTokenizerName) with error: \(error)")
-                throw error
-            }
+            return try tokenizerClass.init(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
         } else {
-            print("TokenizerModel.from: Unsupported tokenizer type: \(normalizedTokenizerName)")
             throw TokenizerError.unsupportedTokenizer(normalizedTokenizerName)
         }
     }
@@ -342,41 +285,47 @@ public class PreTrainedTokenizer: Tokenizer {
     private let cleanUpTokenizationSpaces: Bool
 
     required public init(tokenizerConfig: Config, tokenizerData: Config) throws {
-        var addedTokens: [String : Int] = [:]
-        var specialTokens: [String : Int] = [:]
+        var addedTokens: [String: Int] = [:]
+        var specialTokens: [String: Int] = [:]
         for addedToken in tokenizerData.addedTokens?.arrayValue ?? [] {
-            guard let id = addedToken.id?.intValue else { continue /* malformed: token with no id */ }
-            guard let content = addedToken.content?.stringValue else { continue /* malformed: token with no content */ }
+            guard let id = addedToken.id?.intValue else { continue }
+            guard let content = addedToken.content?.stringValue else { continue }
             addedTokens[content] = id
-
             if addedToken.special?.boolValue ?? false {
                 specialTokens[content] = id
             }
         }
 
-        // Convert to tuples for easier access, then sort by length (descending) to avoid early partial matches
-        // (https://github.com/xenova/transformers.js/commit/c305c3824f628f1f02806a6310bd3b18b0f7f8f5)
-        let unwrappedAddedTokens : [(content: String, prefix: Bool, suffix: Bool)] = (tokenizerData.addedTokens?.arrayValue ?? []).compactMap { addedToken in
-            guard let content = addedToken.content?.stringValue else { return nil }
-            let prefix = addedToken.lstrip?.boolValue ?? false
-            let suffix = addedToken.rstrip?.boolValue ?? false
-            return (content: content, prefix: prefix, suffix: suffix)
-        }.sorted {
-            $0.content.count > $1.content.count
-        }
-
-        // then concatenate into regular expression
-        let addedTokensRegexString = unwrappedAddedTokens.map {
-            let token = NSRegularExpression.escapedPattern(for: $0.content)
-            let prefix = $0.prefix ? #"\s*"# : ""
-            let suffix = $0.suffix ? #"\s*"# : ""
-            return "\(prefix)(\(token))\(suffix)"
-        }.joined(separator: "|")
-        addedTokensRegex = try? NSRegularExpression(pattern: addedTokensRegexString, options: [])
-
-        // TODO: specialTokens are stored but never used
         self.specialTokens = specialTokens
         self.addedTokens = Set(addedTokens.keys)
+
+        // Step 1: Try loading vocab directly from tokenizer.json if model.vocab.value fails
+        var vocabDict: [String: Int] = [:]
+        if let modelConfig = tokenizerData.model,
+           let vocabValue = modelConfig.vocab?.value {
+            if let dict = vocabValue as? [String: Int] {
+                vocabDict = dict  // Use parsed vocab if it’s correct
+            } else {
+                // Step 2: Fallback to direct JSON loading
+                let jsonPath = "/var/mobile/Containers/Data/Application/472B8323-CBCA-467D-BB83-A547FEAA9B4D/Documents/huggingface/models/unum-cloud/uform3-image-text-english-small/tokenizer.json"
+                if let jsonData = try? Data(contentsOf: URL(fileURLWithPath: jsonPath)),
+                   let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
+                   let modelSection = jsonObject["model"] as? [String: Any],
+                   let vocab = modelSection["vocab"] as? [String: Int] {
+                    vocabDict = vocab
+                    print("PreTrainedTokenizer.init: Successfully loaded vocab directly from tokenizer.json with \(vocabDict.count) entries")
+                } else {
+                    throw TokenizerError.malformedVocab
+                }
+            }
+        } else {
+            throw TokenizerError.missingVocab
+        }
+
+        // Step 3: Update tokenizerData with corrected vocab
+        var updatedModelConfig = tokenizerData.model?.dictionary ?? [:]
+        updatedModelConfig["vocab"] = vocabDict
+        let updatedTokenizerData = Config(["model": Config(updatedModelConfig), "decoder": tokenizerData.decoder, "post_processor": tokenizerData.postProcessor, "added_tokens": tokenizerData.addedTokens])
 
         self.preTokenizer = PreTokenizerFactory.fromConfig(config: tokenizerData.preTokenizer)
         self.normalizer = NormalizerFactory.fromConfig(config: tokenizerData.normalizer)
@@ -385,7 +334,8 @@ public class PreTrainedTokenizer: Tokenizer {
         self.cleanUpTokenizationSpaces = tokenizerConfig.cleanUpTokenizationSpaces?.boolValue ?? true
         self.tokenizerConfig = tokenizerConfig
 
-        model = try TokenizerModel.from(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, addedTokens: addedTokens)
+        // Step 4: Initialize the model with corrected data
+        model = try TokenizerModel.from(tokenizerConfig: tokenizerConfig, tokenizerData: updatedTokenizerData, addedTokens: addedTokens)
     }
 
     func preTokenize(_ text: String, options: PreTokenizerOptions) -> [String] {
